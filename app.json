@@ -2,6 +2,7 @@
   "expo": {
     "name": "YT Live Translate",
     "slug": "yt-live-translate",
+    "owner": "kerm1t",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
