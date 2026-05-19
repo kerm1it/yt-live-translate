@@ -1,0 +1,6 @@
+<resources>
+  <string name="app_name">YT Live Translate</string>
+  <string name="accessibility_service_description">读取 YouTube 字幕用于实时翻译悬浮窗</string>
+  <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
+  <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
+</resources>

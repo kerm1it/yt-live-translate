@@ -10,7 +10,9 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  NativeModules,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { fetchYouTubeSubtitles, SubtitleCue } from '../utils/youtube';
@@ -25,12 +27,67 @@ type LoadingStage = 'idle' | 'fetching' | 'translating' | 'done';
 export default function HomeScreen() {
   const navigation = useNavigation<HomeNavigationProp>();
   const [url, setUrl] = useState('');
+  const [overlayActive, setOverlayActive] = useState(false);
+  const [hasOverlayPerm, setHasOverlayPerm] = useState<boolean | null>(null);
+  const [hasA11yPerm, setHasA11yPerm] = useState<boolean | null>(null);
   const [loadingStage, setLoadingStage] = useState<LoadingStage>('idle');
   const [progress, setProgress] = useState(0);
   const [recentUrls, setRecentUrls] = useState<string[]>([]);
   const [showRecent, setShowRecent] = useState(false);
 
   const isLoading = loadingStage !== 'idle' && loadingStage !== 'done';
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return;
+      const { OverlayModule } = NativeModules;
+      if (!OverlayModule) return;
+      OverlayModule.hasOverlayPermission((granted: boolean) => setHasOverlayPerm(granted));
+      OverlayModule.isAccessibilityEnabled((enabled: boolean) => setHasA11yPerm(enabled));
+    }, [])
+  );
+
+  const handleToggleOverlay = useCallback(async () => {
+    const { OverlayModule } = NativeModules;
+    if (!OverlayModule) return;
+    if (overlayActive) {
+      OverlayModule.stopOverlay();
+      setOverlayActive(false);
+      return;
+    }
+    if (!hasOverlayPerm) {
+      Alert.alert(
+        '需要权限',
+        '请授予"显示在其他应用上层"权限，悬浮窗才能覆盖在 YouTube 上方。',
+        [
+          { text: '取消', style: 'cancel' },
+          { text: '去设置', onPress: () => OverlayModule.openOverlayPermissionSettings() },
+        ]
+      );
+      return;
+    }
+    if (!hasA11yPerm) {
+      Alert.alert(
+        '需要无障碍权限',
+        '请在无障碍设置中开启"YT Live Translate"，以便读取 YouTube 字幕。',
+        [
+          { text: '取消', style: 'cancel' },
+          { text: '去无障碍设置', onPress: () => OverlayModule.openAccessibilitySettings() },
+        ]
+      );
+      return;
+    }
+    const apiKey = await loadDeepLApiKey();
+    if (!apiKey) {
+      Alert.alert('需要 DeepL API Key', '请先在设置中填写 DeepL API Key。', [
+        { text: '取消', style: 'cancel' },
+        { text: '去设置', onPress: () => navigation.navigate('Settings') },
+      ]);
+      return;
+    }
+    OverlayModule.startOverlay(apiKey);
+    setOverlayActive(true);
+  }, [overlayActive, hasOverlayPerm, hasA11yPerm, navigation]);
 
   const loadRecent = useCallback(async () => {
     const urls = await loadRecentUrls();
@@ -187,6 +244,28 @@ export default function HomeScreen() {
           <Text style={styles.settingsButtonText}>⚙ Settings</Text>
         </TouchableOpacity>
 
+        {Platform.OS === 'android' && (
+          <View style={styles.overlaySection}>
+            <View style={styles.overlayHeader}>
+              <View style={[styles.statusDot, overlayActive && styles.statusDotActive]} />
+              <Text style={styles.overlayTitle}>
+                {overlayActive ? '悬浮字幕运行中' : '实时悬浮字幕'}
+              </Text>
+            </View>
+            <Text style={styles.overlayDescription}>
+              打开 YouTube 并开启英文 CC 字幕，然后启动悬浮窗，即可实时看到中文翻译。
+            </Text>
+            <TouchableOpacity
+              style={[styles.overlayButton, overlayActive && styles.overlayButtonStop]}
+              onPress={handleToggleOverlay}
+            >
+              <Text style={styles.overlayButtonText}>
+                {overlayActive ? '停止悬浮字幕' : '启动悬浮字幕'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
             Paste a YouTube video URL above. The app will fetch the English subtitles and
@@ -327,5 +406,53 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 13,
     lineHeight: 18,
+  },
+  overlaySection: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  overlayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#555',
+    marginRight: 8,
+  },
+  statusDotActive: {
+    backgroundColor: '#4caf50',
+  },
+  overlayTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  overlayDescription: {
+    fontSize: 13,
+    color: '#888',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  overlayButton: {
+    backgroundColor: '#4A9EFF',
+    borderRadius: 10,
+    padding: 12,
+    alignItems: 'center',
+  },
+  overlayButtonStop: {
+    backgroundColor: '#c0392b',
+  },
+  overlayButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });
