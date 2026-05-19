@@ -2,12 +2,12 @@
   "expo": {
     "name": "YT Live Translate",
     "slug": "yt-live-translate",
-    "owner": "kerm1t",
+
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -29,10 +29,6 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "79901055-91a8-46bb-af52-83c250f5dd3d"
-      }
-    }
+
   }
 }
