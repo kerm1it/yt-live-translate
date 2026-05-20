@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
@@ -13,6 +14,7 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 class SubtitleAccessibilityService : AccessibilityService() {
 
     companion object {
+        const val TAG = "YTLiveA11y"
         const val ACTION_SUBTITLE_UPDATE = "com.ytlivetranslate.app.SUBTITLE_UPDATE"
         const val EXTRA_SUBTITLE_TEXT = "subtitle_text"
 
@@ -26,6 +28,7 @@ class SubtitleAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         isRunning = true
+        Log.i(TAG, "onServiceConnected")
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
@@ -48,13 +51,22 @@ class SubtitleAccessibilityService : AccessibilityService() {
     }
 
     private fun processEvent() {
-        val rootNode = rootInActiveWindow ?: return
+        val rootNode = rootInActiveWindow
+        if (rootNode == null) {
+            Log.d(TAG, "processEvent: rootInActiveWindow null")
+            return
+        }
         val subtitle = findSubtitleText(rootNode)
         rootNode.recycle()
 
-        if (subtitle.isNullOrBlank() || subtitle == lastSubtitle) return
+        if (subtitle.isNullOrBlank()) {
+            Log.d(TAG, "processEvent: no subtitle node matched")
+            return
+        }
+        if (subtitle == lastSubtitle) return
         lastSubtitle = subtitle
 
+        Log.i(TAG, "processEvent: captured subtitle: $subtitle")
         val intent = Intent(ACTION_SUBTITLE_UPDATE).apply {
             putExtra(EXTRA_SUBTITLE_TEXT, subtitle)
         }

@@ -4,36 +4,41 @@ import android.app.*
 import android.content.*
 import android.graphics.*
 import android.os.*
+import android.util.Log
 import android.view.*
 import android.view.ViewOutlineProvider
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.IOException
+import okhttp3.Call
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class FloatingWindowService : Service() {
 
     companion object {
-        const val EXTRA_DEEPL_API_KEY = "deepl_api_key"
+        const val TAG = "YTLiveOverlaySvc"
         const val CHANNEL_ID = "overlay_channel"
         const val NOTIFICATION_ID = 1001
+        const val EXTRA_BASE_URL = "base_url"
+        const val EXTRA_API_KEY = "api_key"
+        const val EXTRA_MODEL = "model"
+        const val EXTRA_TARGET_LANG = "target_lang"
     }
 
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: View
     private lateinit var subtitleTextView: TextView
 
-    private var deeplApiKey: String = ""
-    private var lastEnglishText: String = ""
+    private var config: Translator.Config? = null
+    private var lastSrc = ""
+    @Volatile private var context = listOf<Translator.ContextPair>()
+    private val pending = AtomicReference<String?>(null)
+    private val workerActive = AtomicBoolean(false)
+    @Volatile private var currentCall: Call? = null
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val httpClient = OkHttpClient()
 
     private var initialX = 0
     private var initialY = 0
@@ -46,7 +51,7 @@ class FloatingWindowService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID, buildNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
             )
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())
@@ -59,8 +64,20 @@ class FloatingWindowService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        intent?.getStringExtra(EXTRA_DEEPL_API_KEY)?.let { key ->
-            if (key.isNotBlank()) deeplApiKey = key
+        intent?.let { extras ->
+            val baseUrl = extras.getStringExtra(EXTRA_BASE_URL)
+            val apiKey = extras.getStringExtra(EXTRA_API_KEY)
+            val model = extras.getStringExtra(EXTRA_MODEL)
+            val targetLang = extras.getStringExtra(EXTRA_TARGET_LANG)
+            if (!baseUrl.isNullOrBlank() && !apiKey.isNullOrBlank() && !model.isNullOrBlank()) {
+                config = Translator.Config(
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model,
+                    targetLang = targetLang?.ifBlank { "中文" } ?: "中文"
+                )
+                Log.i(TAG, "config loaded model=$model targetLang=$targetLang")
+            }
         }
         return START_STICKY
     }
@@ -98,7 +115,7 @@ class FloatingWindowService : Service() {
             setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8))
             maxLines = 3
             ellipsize = android.text.TextUtils.TruncateAt.END
-            text = "YT Translate 已启动"
+            text = "YT Translate 已启动，等待字幕…"
         }
         container.addView(subtitleTextView)
         overlayView = container
@@ -150,49 +167,58 @@ class FloatingWindowService : Service() {
     }
 
     private val subtitleReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
+        override fun onReceive(ctx: Context, intent: Intent) {
             val text = intent.getStringExtra(
                 SubtitleAccessibilityService.EXTRA_SUBTITLE_TEXT
-            ) ?: return
-            if (text == lastEnglishText) return
-            lastEnglishText = text
-            translateAndDisplay(text)
-        }
-    }
-
-    private fun translateAndDisplay(english: String) {
-        if (deeplApiKey.isBlank()) {
-            mainHandler.post { subtitleTextView.text = english }
-            return
-        }
-        executor.execute {
-            val chinese = callDeepL(english) ?: english
-            mainHandler.post { subtitleTextView.text = chinese }
-        }
-    }
-
-    private fun callDeepL(text: String): String? {
-        val json = JSONObject().apply {
-            put("text", JSONArray().put(text))
-            put("target_lang", "ZH")
-        }
-        val body = json.toString().toRequestBody("application/json".toMediaType())
-        val request = Request.Builder()
-            .url("https://api-free.deepl.com/v2/translate")
-            .addHeader("Authorization", "DeepL-Auth-Key $deeplApiKey")
-            .post(body)
-            .build()
-
-        return try {
-            httpClient.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) return null
-                val respJson = JSONObject(resp.body!!.string())
-                respJson.getJSONArray("translations")
-                    .getJSONObject(0)
-                    .getString("text")
+            )?.trim().orEmpty()
+            if (text.isEmpty() || text == lastSrc) return
+            lastSrc = text
+            if (config == null) {
+                mainHandler.post { subtitleTextView.text = text }
+                return
             }
-        } catch (_: IOException) {
-            null
+            val prev = pending.getAndSet(text)
+            Log.i(TAG, "receiver: text='$text' replaced=${prev != null}")
+            if (prev != null) currentCall?.cancel()
+            startWorker()
+        }
+    }
+
+    private fun startWorker() {
+        val cfg = config ?: return
+        if (!workerActive.compareAndSet(false, true)) return
+        executor.execute {
+            try {
+                while (true) {
+                    val text = pending.getAndSet(null) ?: break
+                    Log.i(TAG, "stream begin: '$text'")
+                    try {
+                        val out = Translator.translateLineStream(
+                            text, context, cfg,
+                            callRef = { currentCall = it },
+                            onDelta = { partial ->
+                                mainHandler.post { subtitleTextView.text = partial }
+                            }
+                        )
+                        currentCall = null
+                        Log.i(TAG, "stream done: '$out'")
+                        if (out.isNotBlank()) {
+                            context = (context + Translator.ContextPair(text, out))
+                                .takeLast(Translator.CONTEXT_WINDOW)
+                        }
+                    } catch (e: Exception) {
+                        currentCall = null
+                        Log.w(TAG, "stream failed", e)
+                        // 如果是被取消（pending 已经有新文本），不要覆盖
+                        if (pending.get() == null) {
+                            mainHandler.post { subtitleTextView.text = text }
+                        }
+                    }
+                }
+            } finally {
+                workerActive.set(false)
+                if (pending.get() != null) startWorker()
+            }
         }
     }
 
@@ -219,7 +245,7 @@ class FloatingWindowService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("YT Translate 字幕翻译中")
-            .setContentText("正在翻译 YouTube 字幕为中文")
+            .setContentText("正在翻译 YouTube 字幕")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

@@ -1,24 +1,40 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEYS = {
-  DEEPL_API_KEY: '@yt_translate/deepl_api_key',
+  TRANSLATOR_CONFIG: '@yt_translate/translator_config',
   RECENT_URLS: '@yt_translate/recent_urls',
 } as const;
 
 const MAX_RECENT_URLS = 10;
 
-// DeepL API Key
-
-export async function saveDeepLApiKey(apiKey: string): Promise<void> {
-  await AsyncStorage.setItem(KEYS.DEEPL_API_KEY, apiKey);
+export interface TranslatorConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  targetLang: string;
 }
 
-export async function loadDeepLApiKey(): Promise<string> {
-  const key = await AsyncStorage.getItem(KEYS.DEEPL_API_KEY);
-  return key ?? '';
+export const DEFAULT_TRANSLATOR_CONFIG: TranslatorConfig = {
+  baseUrl: 'https://api.deepseek.com/v1',
+  apiKey: '',
+  model: 'deepseek-v4-flash',
+  targetLang: '中文',
+};
+
+export async function saveTranslatorConfig(config: TranslatorConfig): Promise<void> {
+  await AsyncStorage.setItem(KEYS.TRANSLATOR_CONFIG, JSON.stringify(config));
 }
 
-// Recent URLs
+export async function loadTranslatorConfig(): Promise<TranslatorConfig> {
+  const json = await AsyncStorage.getItem(KEYS.TRANSLATOR_CONFIG);
+  if (!json) return { ...DEFAULT_TRANSLATOR_CONFIG };
+  try {
+    const parsed = JSON.parse(json) as Partial<TranslatorConfig>;
+    return { ...DEFAULT_TRANSLATOR_CONFIG, ...parsed };
+  } catch {
+    return { ...DEFAULT_TRANSLATOR_CONFIG };
+  }
+}
 
 export async function loadRecentUrls(): Promise<string[]> {
   const json = await AsyncStorage.getItem(KEYS.RECENT_URLS);
@@ -39,8 +55,6 @@ export async function saveRecentUrl(url: string): Promise<void> {
   await AsyncStorage.setItem(KEYS.RECENT_URLS, JSON.stringify(updated));
 }
 
-// Clear all data
-
 export async function clearAllData(): Promise<void> {
-  await AsyncStorage.multiRemove([KEYS.DEEPL_API_KEY, KEYS.RECENT_URLS]);
+  await AsyncStorage.multiRemove([KEYS.TRANSLATOR_CONFIG, KEYS.RECENT_URLS]);
 }

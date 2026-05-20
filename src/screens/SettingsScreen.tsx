@@ -9,114 +9,168 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
-import { saveDeepLApiKey, loadDeepLApiKey, clearAllData } from '../utils/storage';
-import { translateText } from '../utils/deepl';
+import {
+  saveTranslatorConfig,
+  loadTranslatorConfig,
+  clearAllData,
+  DEFAULT_TRANSLATOR_CONFIG,
+  TranslatorConfig,
+} from '../utils/storage';
+import { translateText } from '../utils/translator';
 
 export default function SettingsScreen() {
-  const [apiKey, setApiKey] = useState('');
-  const [savedKey, setSavedKey] = useState('');
+  const [config, setConfig] = useState<TranslatorConfig>(DEFAULT_TRANSLATOR_CONFIG);
+  const [savedConfig, setSavedConfig] = useState<TranslatorConfig>(DEFAULT_TRANSLATOR_CONFIG);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
 
   useEffect(() => {
-    loadDeepLApiKey()
-      .then((key) => {
-        setApiKey(key);
-        setSavedKey(key);
+    loadTranslatorConfig()
+      .then((c) => {
+        setConfig(c);
+        setSavedConfig(c);
       })
       .catch(console.error);
+  }, []);
+
+  const updateField = useCallback(<K extends keyof TranslatorConfig>(key: K, value: TranslatorConfig[K]) => {
+    setConfig((prev) => ({ ...prev, [key]: value }));
+    setTestResult(null);
   }, []);
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
     setTestResult(null);
     try {
-      await saveDeepLApiKey(apiKey.trim());
-      setSavedKey(apiKey.trim());
-      Alert.alert('Saved', 'DeepL API key saved successfully.');
+      const trimmed: TranslatorConfig = {
+        baseUrl: config.baseUrl.trim(),
+        apiKey: config.apiKey.trim(),
+        model: config.model.trim(),
+        targetLang: config.targetLang.trim() || '中文',
+      };
+      await saveTranslatorConfig(trimmed);
+      setConfig(trimmed);
+      setSavedConfig(trimmed);
+      Alert.alert('已保存', '翻译服务配置已保存。');
     } catch {
-      Alert.alert('Error', 'Failed to save API key.');
+      Alert.alert('错误', '保存失败。');
     } finally {
       setIsSaving(false);
     }
-  }, [apiKey]);
+  }, [config]);
 
   const handleTest = useCallback(async () => {
-    const key = apiKey.trim();
-    if (!key) {
-      Alert.alert('Error', 'Please enter an API key first.');
+    const trimmed: TranslatorConfig = {
+      baseUrl: config.baseUrl.trim(),
+      apiKey: config.apiKey.trim(),
+      model: config.model.trim(),
+      targetLang: config.targetLang.trim() || '中文',
+    };
+    if (!trimmed.apiKey || !trimmed.baseUrl || !trimmed.model) {
+      Alert.alert('错误', '请先填写 Base URL、API Key 和 Model。');
       return;
     }
 
     setIsTesting(true);
     setTestResult(null);
     try {
-      const result = await translateText('Hello, world!', key, 'ZH');
-      setTestResult(`Translation test passed: "${result}"`);
+      const result = await translateText('Hello, world!', trimmed, trimmed.targetLang);
+      setTestResult(`测试成功: "${result}"`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Test failed.';
-      setTestResult(`Test failed: ${message}`);
+      const message = error instanceof Error ? error.message : '测试失败。';
+      setTestResult(`测试失败: ${message}`);
     } finally {
       setIsTesting(false);
     }
-  }, [apiKey]);
+  }, [config]);
 
   const handleClearData = useCallback(() => {
-    Alert.alert(
-      'Clear All Data',
-      'This will remove your API key and all saved URLs. Are you sure?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await clearAllData();
-              setApiKey('');
-              setSavedKey('');
-              setTestResult(null);
-              Alert.alert('Done', 'All saved data has been cleared.');
-            } catch {
-              Alert.alert('Error', 'Failed to clear data.');
-            }
-          },
+    Alert.alert('清除所有数据', '将清除翻译服务配置和保存的 URL，确定吗？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '清除',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await clearAllData();
+            setConfig(DEFAULT_TRANSLATOR_CONFIG);
+            setSavedConfig(DEFAULT_TRANSLATOR_CONFIG);
+            setTestResult(null);
+            Alert.alert('完成', '所有数据已清除。');
+          } catch {
+            Alert.alert('错误', '清除失败。');
+          }
         },
-      ]
-    );
+      },
+    ]);
   }, []);
 
-  const hasChanges = apiKey.trim() !== savedKey;
+  const hasChanges =
+    config.baseUrl.trim() !== savedConfig.baseUrl ||
+    config.apiKey.trim() !== savedConfig.apiKey ||
+    config.model.trim() !== savedConfig.model ||
+    config.targetLang.trim() !== savedConfig.targetLang;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>DeepL API Key</Text>
+        <Text style={styles.sectionTitle}>翻译服务（OpenAI 兼容）</Text>
         <Text style={styles.sectionDescription}>
-          Required for translation. Get a free API key at deepl.com/pro#developer
-          (Free tier: 500,000 chars/month).
+          支持任何 OpenAI 兼容的 /v1/chat/completions 接口：OpenAI、DeepSeek、OpenRouter、SiliconFlow、本地 vLLM/Ollama 等。
         </Text>
 
+        <Text style={styles.fieldLabel}>Base URL</Text>
         <TextInput
           style={styles.input}
-          value={apiKey}
-          onChangeText={(text) => {
-            setApiKey(text);
-            setTestResult(null);
-          }}
-          placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+          value={config.baseUrl}
+          onChangeText={(t) => updateField('baseUrl', t)}
+          placeholder="https://api.deepseek.com/v1"
+          placeholderTextColor="#555"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+
+        <Text style={styles.fieldLabel}>API Key</Text>
+        <TextInput
+          style={styles.input}
+          value={config.apiKey}
+          onChangeText={(t) => updateField('apiKey', t)}
+          placeholder="sk-..."
           placeholderTextColor="#555"
           autoCapitalize="none"
           autoCorrect={false}
           secureTextEntry={false}
         />
 
+        <Text style={styles.fieldLabel}>Model</Text>
+        <TextInput
+          style={styles.input}
+          value={config.model}
+          onChangeText={(t) => updateField('model', t)}
+          placeholder="deepseek-v4-flash"
+          placeholderTextColor="#555"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        <Text style={styles.fieldLabel}>目标语言</Text>
+        <TextInput
+          style={styles.input}
+          value={config.targetLang}
+          onChangeText={(t) => updateField('targetLang', t)}
+          placeholder="中文"
+          placeholderTextColor="#555"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
         {testResult && (
           <View
             style={[
               styles.testResultBox,
-              testResult.startsWith('Translation test passed')
+              testResult.startsWith('测试成功')
                 ? styles.testResultSuccess
                 : styles.testResultError,
             ]}
@@ -134,7 +188,7 @@ export default function SettingsScreen() {
             {isTesting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.buttonText}>Test Key</Text>
+              <Text style={styles.buttonText}>测试</Text>
             )}
           </TouchableOpacity>
 
@@ -150,27 +204,24 @@ export default function SettingsScreen() {
             {isSaving ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.buttonText}>Save</Text>
+              <Text style={styles.buttonText}>保存</Text>
             )}
           </TouchableOpacity>
         </View>
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Data</Text>
+        <Text style={styles.sectionTitle}>数据</Text>
         <TouchableOpacity style={styles.dangerButton} onPress={handleClearData}>
-          <Text style={styles.dangerButtonText}>Clear All Saved Data</Text>
+          <Text style={styles.dangerButtonText}>清除所有数据</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>About</Text>
+        <Text style={styles.sectionTitle}>关于</Text>
         <Text style={styles.aboutText}>YT Live Translate v1.0.0</Text>
         <Text style={styles.aboutText}>
-          Fetches subtitles from YouTube videos and translates them using DeepL.
-        </Text>
-        <Text style={styles.aboutText}>
-          This app uses the YouTube timedtext API and DeepL Free API.
+          通过 OpenAI 兼容接口翻译 YouTube 视频字幕。
         </Text>
       </View>
     </ScrollView>
@@ -201,6 +252,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     marginBottom: 14,
+  },
+  fieldLabel: {
+    color: '#aaa',
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 6,
+    marginTop: 4,
   },
   input: {
     backgroundColor: '#1e1e1e',

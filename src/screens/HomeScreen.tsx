@@ -16,8 +16,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { fetchYouTubeSubtitles, SubtitleCue } from '../utils/youtube';
-import { translateSubtitles } from '../utils/deepl';
-import { loadDeepLApiKey, saveRecentUrl, loadRecentUrls } from '../utils/storage';
+import { translateSubtitles } from '../utils/translator';
+import { loadTranslatorConfig, saveRecentUrl, loadRecentUrls } from '../utils/storage';
 import type { RootStackParamList } from '../../App';
 
 type HomeNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
@@ -77,15 +77,20 @@ export default function HomeScreen() {
       );
       return;
     }
-    const apiKey = await loadDeepLApiKey();
-    if (!apiKey) {
-      Alert.alert('需要 DeepL API Key', '请先在设置中填写 DeepL API Key。', [
+    const cfg = await loadTranslatorConfig();
+    if (!cfg.apiKey || !cfg.baseUrl || !cfg.model) {
+      Alert.alert('需要翻译服务配置', '请先在设置中填写 Base URL、API Key 和 Model。', [
         { text: '取消', style: 'cancel' },
         { text: '去设置', onPress: () => navigation.navigate('Settings') },
       ]);
       return;
     }
-    OverlayModule.startOverlay(apiKey);
+    OverlayModule.startOverlay({
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+      model: cfg.model,
+      targetLang: cfg.targetLang,
+    });
     setOverlayActive(true);
   }, [overlayActive, hasOverlayPerm, hasA11yPerm, navigation]);
 
@@ -106,14 +111,14 @@ export default function HomeScreen() {
       return;
     }
 
-    const apiKey = await loadDeepLApiKey();
-    if (!apiKey) {
+    const cfg = await loadTranslatorConfig();
+    if (!cfg.apiKey || !cfg.baseUrl || !cfg.model) {
       Alert.alert(
-        'API Key Required',
-        'Please add your DeepL API key in Settings before translating.',
+        '需要翻译服务配置',
+        '请先在设置中填写 Base URL、API Key 和 Model。',
         [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Go to Settings', onPress: () => navigation.navigate('Settings') },
+          { text: '取消', style: 'cancel' },
+          { text: '去设置', onPress: () => navigation.navigate('Settings') },
         ]
       );
       return;
@@ -129,7 +134,7 @@ export default function HomeScreen() {
       setLoadingStage('translating');
 
       const texts = cues.map((c) => c.text);
-      const translated = await translateSubtitles(texts, apiKey, 'ZH', (done, total) => {
+      const translated = await translateSubtitles(texts, cfg, cfg.targetLang, (done, total) => {
         setProgress(Math.round((done / total) * 100));
       });
 
@@ -268,11 +273,10 @@ export default function HomeScreen() {
 
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
-            Paste a YouTube video URL above. The app will fetch the English subtitles and
-            translate them to Chinese using DeepL.
+            粘贴 YouTube 视频链接，应用会抓取字幕并通过 OpenAI 兼容服务翻译。
           </Text>
           <Text style={styles.infoText}>
-            You need a free DeepL API key. Get one at deepl.com/pro#developer
+            在「设置」中填写 Base URL、API Key 和 Model（支持 OpenAI / DeepSeek / OpenRouter 等）。
           </Text>
         </View>
       </ScrollView>
